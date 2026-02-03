@@ -24,6 +24,11 @@ namespace MyTimestamp
     {
         private bool _isDraggingSlider = false;
         private OcrEngine? _ocrEngine;
+        
+        // Services
+        private IOcrService _currentOcrService;
+        private WindowsOcrService _winOcr = new WindowsOcrService();
+        private TesseractOcrService _tessOcr = new TesseractOcrService();
 
         // ROI Dragging State
         private bool _isDraggingRoi = false;
@@ -34,18 +39,22 @@ namespace MyTimestamp
         public MainWindow()
         {
             InitializeComponent();
+            
+            // Default
+            _currentOcrService = _winOcr;
             InitializeOcr();
         }
 
-        private void InitializeOcr()
+        private async void InitializeOcr()
         {
             try
             {
-                _ocrEngine = OcrEngine.TryCreateFromUserProfileLanguages();
-                if (_ocrEngine == null)
-                {
-                    MessageBox.Show("OCR Engine could not be initialized. Please ensure a language pack is installed.");
-                }
+                await _currentOcrService.InitAsync();
+                
+                // Legacy for AutoFind
+                try {
+                     if (_ocrEngine == null) _ocrEngine = OcrEngine.TryCreateFromUserProfileLanguages();
+                } catch {}
             }
             catch (Exception ex)
             {
@@ -267,23 +276,124 @@ namespace MyTimestamp
         // OCR Logic
         // =========================================================
 
+        private async void ComboOcrEngine_SelectionChanged(object sender, SelectionChangedEventArgs e)
+        {
+            if (ComboOcrEngine.SelectedIndex == 0)
+                _currentOcrService = _winOcr;
+            else
+                _currentOcrService = _tessOcr;
+
+            await _currentOcrService.InitAsync();
+        }
+
+        // Preprocessing UI Handlers
+        private void Preprocessing_Changed(object sender, RoutedEventArgs e)
+        {
+            // Auto-update preview window if open? For now just ready for next click.
+        }
+        
+        private async void PreviewImage_Click(object sender, RoutedEventArgs e)
+        {
+             if (string.IsNullOrEmpty(_currentVideoPath)) return;
+             
+             // 1. Capture High Res
+             var fullBmp = await CaptureHighResFrame(_currentVideoPath, VideoPlayer.Position);
+             if (fullBmp == null) return;
+             
+             // 2. Crop
+              if (!double.TryParse(RoiX.Text, out double x) ||
+                    !double.TryParse(RoiY.Text, out double y) ||
+                    !double.TryParse(RoiW.Text, out double w) ||
+                    !double.TryParse(RoiH.Text, out double h)) return;
+
+                int cropX = (int)(x * fullBmp.PixelWidth);
+                int cropY = (int)(y * fullBmp.PixelHeight);
+                int cropW = (int)(w * fullBmp.PixelWidth);
+                int cropH = (int)(h * fullBmp.PixelHeight);
+
+                // Boundary/Crash checks
+                if (cropX < 0) cropX = 0; if (cropY < 0) cropY = 0;
+                if (cropX + cropW > fullBmp.PixelWidth) cropW = fullBmp.PixelWidth - cropX;
+                if (cropY + cropH > fullBmp.PixelHeight) cropH = fullBmp.PixelHeight - cropY;
+                if (cropW <= 0 || cropH <= 0) return;
+
+                var wpfBitmap = await ConvertSoftwareBitmapToWpf(fullBmp);
+                var cropped = new CroppedBitmap(wpfBitmap, new Int32Rect(cropX, cropY, cropW, cropH));
+             
+             // 3. Process
+             var processed = ApplyPreprocessing(cropped);
+             
+             // 4. Show in new Window
+             var previewWindow = new Window
+             {
+                 Title = "Processed Image Preview",
+                 Width = processed.PixelWidth + 40,
+                 Height = processed.PixelHeight + 60,
+                 Content = new Image { Source = processed, Stretch = Stretch.Uniform }
+             };
+             previewWindow.ShowDialog();
+        }
+
+        private BitmapSource ApplyPreprocessing(BitmapSource input)
+        {
+            // Convert to System.Drawing.Bitmap
+            using (var winWin = ImageProcessor.ToWinFormsBitmap(input))
+            {
+               // Process
+               using (var processed = ImageProcessor.Process(
+                   winWin, 
+                   ChkInvert.IsChecked == true, 
+                   ChkBinarize.IsChecked == true, 
+                   (int)SliderThreshold.Value, 
+                   ChkDilate.IsChecked == true))
+               {
+                   // Convert back
+                   return ImageProcessor.ToWpfBitmap(processed);
+               }
+            }
+        }
+
         private async void AutoFind_Click(object sender, RoutedEventArgs e)
         {
-             if (_ocrEngine == null || string.IsNullOrEmpty(_currentVideoPath)) return;
+             if (string.IsNullOrEmpty(_currentVideoPath)) return;
              try 
              {
                  // 1. Capture Full High-Res Frame
                  var fullBmp = await CaptureHighResFrame(_currentVideoPath, VideoPlayer.Position);
                  if (fullBmp == null) return;
                  
+                 // Branch based on Service Type
+                 if (_currentOcrService is TesseractOcrService)
+                 {
+                     // Convert to Bitmap
+                     var wpfFull = await ConvertSoftwareBitmapToWpf(fullBmp);
+                     using (var sysDrawingFull = ImageProcessor.ToWinFormsBitmap(wpfFull))
+                     {
+                         var res = await _currentOcrService.RecognizeAsync(sysDrawingFull);
+                         Regex r = new Regex(@"\d{1,2}[:;.]\d{2}([:;.]\d{2})?");
+                         var m = r.Match(res.Text);
+                         
+                         if (m.Success)
+                             MessageBox.Show($"Found timestamp: {m.Value}\n(Auto-ROI placement is currently only supported in Windows Native Mode)");
+                         else
+                             MessageBox.Show("No timestamp pattern found (Tesseract).");
+                     }
+                     return;
+                 }
+
+                 // --- Windows Native Logic (Preserved for ROI placement) ---
+                 
+                 // Ensure engine exists
+                 if (_ocrEngine == null) _ocrEngine = OcrEngine.TryCreateFromUserProfileLanguages();
+                 if (_ocrEngine == null) return;
+
                  // 2. Run OCR on full frame
                  var result = await _ocrEngine.RecognizeAsync(fullBmp);
                  
                  // 3. Find Timestamp Pattern
-                 // Looking for XX:XX or XX:XX:XX
-                 // Common OCR mistakes: 8 instead of :, ; instead of :, etc.
-                 // Regex: \d{1,2}[:;.]\d{2}([:;.]\d{2})?
                  Regex timeRegex = new Regex(@"\d{1,2}[:;.]\d{2}([:;.]\d{2})?");
+                 
+                 OcrResultText.Text = result.Text; // Debug
 
                  Windows.Foundation.Rect? bestBox = null;
                  string bestText = "";
@@ -292,32 +402,22 @@ namespace MyTimestamp
                  {
                      if (timeRegex.IsMatch(line.Text))
                      {
-                         // Found a candidate.
-                         // Find the specific WORDS that match?
-                         // For simplicity, let's take the bounding box of the whole line if the line is short (mostly timestamp)
-                         // OR iterate words.
-                         
                          foreach(var word in line.Words)
                          {
                              if (timeRegex.IsMatch(word.Text))
                              {
                                  bestBox = word.BoundingRect;
                                  bestText = word.Text;
-                                 break; // Take first confident match
+                                 break; 
                              }
                          }
                          
-                         if (bestBox == null) // If no single word matched, maybe the line matched (e.g. "Time: 12:00:00")
+                         if (bestBox == null) 
                          {
                               if (timeRegex.IsMatch(line.Text))
                               {
-                                   // Try to approximate.
-                                   // Or purely use the line box if the whole line is short.
                                    if (line.Text.Length < 20) 
                                    {
-                                       // Combine logic: Iterate words and build a rect for the matching range?
-                                       // Simple approach: Take the whole line for now.
-                                       // Just checking if "line.Text" is the timestamp.
                                        bestBox = EncloseWords(line, timeRegex);
                                        bestText = line.Text;
                                    }
@@ -329,9 +429,6 @@ namespace MyTimestamp
 
                  if (bestBox != null)
                  {
-                     // Map OCR coordinates (High-Res Native) to ROI percentages.
-                     // OCR was run on the *native* resolution bitmap.
-                     
                      var rect = bestBox.Value;
                      double nativeWidth = fullBmp.PixelWidth;
                      double nativeHeight = fullBmp.PixelHeight;
@@ -438,14 +535,20 @@ namespace MyTimestamp
                 
                 var wpfBitmap = await ConvertSoftwareBitmapToWpf(fullBmp);
                 CroppedBitmap cropped = new CroppedBitmap(wpfBitmap, new Int32Rect(cropX, cropY, cropW, cropH));
-                var finalSoftwareBitmap = await ConvertToSoftwareBitmap(cropped);
+                
+                // --- PREPROCESSING ---
+                var finalInput = ApplyPreprocessing(cropped);
+                
+                // 3. Convert to Standard Bitmap for Service
+                using (var sysDrawingBitmap = ImageProcessor.ToWinFormsBitmap(finalInput))
+                {
+                    // 4. Run OCR
+                    var result = await _currentOcrService.RecognizeAsync(sysDrawingBitmap);
 
-                // 4. Run OCR
-                var result = await _ocrEngine.RecognizeAsync(finalSoftwareBitmap);
-
-                // 5. Display
-               OcrResultText.Text = result.Text;
-               ExtractedTimeText.Text = result.Text.Replace("\n", " ").Trim(); 
+                    // 5. Display
+                    OcrResultText.Text = result.Text;
+                    ExtractedTimeText.Text = result.Text.Replace("\n", " ").Trim();
+                }
             }
             catch (Exception ex)
             {

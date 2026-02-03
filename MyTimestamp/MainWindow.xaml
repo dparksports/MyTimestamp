@@ -73,7 +73,29 @@
             <StackPanel>
                 <TextBlock Text="Settings" FontWeight="Bold" FontSize="16" Margin="0,0,0,10"/>
                 
-                <Button Content="Auto Find Timestamp" Click="AutoFind_Click" Margin="0,0,0,10" Background="#ddf"/>
+                
+                <GroupBox Header="Image Processing">
+                    <StackPanel Margin="5">
+                         <DockPanel Margin="0,0,0,10">
+                            <TextBlock Text="Engine:" VerticalAlignment="Center" Width="45"/>
+                            <ComboBox x:Name="ComboOcrEngine" SelectionChanged="ComboOcrEngine_SelectionChanged">
+                                <ComboBoxItem Content="Windows Native" IsSelected="True"/>
+                                <ComboBoxItem Content="Tesseract OCR"/>
+                            </ComboBox>
+                        </DockPanel>
+
+                        <CheckBox x:Name="ChkInvert" Content="Invert Colors" Click="Preprocessing_Changed" />
+                        <CheckBox x:Name="ChkBinarize" Content="Binarize" IsChecked="True" Margin="0,5,0,0" Click="Preprocessing_Changed" />
+                        <DockPanel Margin="10,0,0,0">
+                            <TextBlock Text="Thresh:" Width="45"/>
+                            <TextBlock Text="{Binding Value, ElementName=SliderThreshold, StringFormat=N0}" Width="30" TextAlignment="Right"/>
+                            <Slider x:Name="SliderThreshold" Minimum="0" Maximum="255" Value="140" ValueChanged="Preprocessing_Changed"/>
+                        </DockPanel>
+                        <CheckBox x:Name="ChkDilate" Content="Dilate (Fix Dots)" IsChecked="True" Margin="0,5,0,0" Click="Preprocessing_Changed" />
+                        
+                        <Button Content="Preview Image" Click="PreviewImage_Click" Margin="0,10,0,0"/>
+                    </StackPanel>
+                </GroupBox>
 
                 <GroupBox Header="ROI Settings (Percentage)">
                     <StackPanel Margin="5">
