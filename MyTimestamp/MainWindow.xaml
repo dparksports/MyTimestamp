@@ -81,6 +81,7 @@
                             <ComboBox x:Name="ComboOcrEngine" SelectionChanged="ComboOcrEngine_SelectionChanged">
                                 <ComboBoxItem Content="Windows Native" IsSelected="True"/>
                                 <ComboBoxItem Content="Tesseract OCR"/>
+                                <ComboBoxItem Content="PaddleOCR (Local)"/>
                             </ComboBox>
                         </DockPanel>
 

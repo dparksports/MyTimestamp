@@ -29,6 +29,7 @@ namespace MyTimestamp
         private IOcrService _currentOcrService;
         private WindowsOcrService _winOcr = new WindowsOcrService();
         private TesseractOcrService _tessOcr = new TesseractOcrService();
+        private PaddleOcrService _paddleOcr = new PaddleOcrService();
 
         // ROI Dragging State
         private bool _isDraggingRoi = false;
@@ -278,12 +279,23 @@ namespace MyTimestamp
 
         private async void ComboOcrEngine_SelectionChanged(object sender, SelectionChangedEventArgs e)
         {
-            if (ComboOcrEngine.SelectedIndex == 0)
-                _currentOcrService = _winOcr;
-            else
-                _currentOcrService = _tessOcr;
+            try
+            {
+                if (ComboOcrEngine.SelectedIndex == 0)
+                    _currentOcrService = _winOcr;
+                else if (ComboOcrEngine.SelectedIndex == 1)
+                    _currentOcrService = _tessOcr;
+                else
+                    _currentOcrService = _paddleOcr;
 
-            await _currentOcrService.InitAsync();
+                await _currentOcrService.InitAsync();
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"Failed to initialize OCR Engine: {ex.Message}");
+                // Revert to Windows Native if failed (e.g. AI not supported)
+                ComboOcrEngine.SelectedIndex = 0;
+            }
         }
 
         // Preprocessing UI Handlers
