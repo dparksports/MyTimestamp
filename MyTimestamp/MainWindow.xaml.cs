@@ -346,6 +346,67 @@ namespace MyTimestamp
              previewWindow.ShowDialog();
         }
 
+        private async void SaveRoiImage_Click(object sender, RoutedEventArgs e)
+        {
+             if (string.IsNullOrEmpty(_currentVideoPath)) return;
+             
+             try 
+             {
+                 // 1. Capture High Res
+                 var fullBmp = await CaptureHighResFrame(_currentVideoPath, VideoPlayer.Position);
+                 if (fullBmp == null) return;
+                 
+                 // 2. Crop
+                 if (!double.TryParse(RoiX.Text, out double x) ||
+                     !double.TryParse(RoiY.Text, out double y) ||
+                     !double.TryParse(RoiW.Text, out double w) ||
+                     !double.TryParse(RoiH.Text, out double h)) return;
+
+                 int cropX = (int)(x * fullBmp.PixelWidth);
+                 int cropY = (int)(y * fullBmp.PixelHeight);
+                 int cropW = (int)(w * fullBmp.PixelWidth);
+                 int cropH = (int)(h * fullBmp.PixelHeight);
+
+                 // Boundary checks
+                 if (cropX < 0) cropX = 0; if (cropY < 0) cropY = 0;
+                 if (cropX + cropW > fullBmp.PixelWidth) cropW = fullBmp.PixelWidth - cropX;
+                 if (cropY + cropH > fullBmp.PixelHeight) cropH = fullBmp.PixelHeight - cropY;
+                 if (cropW <= 0 || cropH <= 0) return;
+
+                 var wpfBitmap = await ConvertSoftwareBitmapToWpf(fullBmp);
+                 var cropped = new CroppedBitmap(wpfBitmap, new Int32Rect(cropX, cropY, cropW, cropH));
+                 
+                 // 3. Process
+                 var processed = ApplyPreprocessing(cropped);
+                 
+                 // 4. Save
+                 var dialog = new Microsoft.Win32.SaveFileDialog
+                 {
+                     Filter = "PNG Image|*.png|JPEG Image|*.jpg",
+                     FileName = $"roi_preview_{DateTime.Now:yyyyMMdd_HHmmss}.png"
+                 };
+
+                 if (dialog.ShowDialog() == true)
+                 {
+                     using (var fileStream = new FileStream(dialog.FileName, FileMode.Create))
+                     {
+                         System.Windows.Media.Imaging.BitmapEncoder encoder;
+                         if (System.IO.Path.GetExtension(dialog.FileName).ToLower() == ".jpg")
+                             encoder = new PngBitmapEncoder(); // Fallback to PNG for quality
+                         else
+                             encoder = new PngBitmapEncoder();
+
+                         encoder.Frames.Add(System.Windows.Media.Imaging.BitmapFrame.Create(processed));
+                         encoder.Save(fileStream);
+                     }
+                 }
+             }
+             catch (Exception ex)
+             {
+                 MessageBox.Show($"Failed to save image: {ex.Message}");
+             }
+        }
+
         private BitmapSource ApplyPreprocessing(BitmapSource input)
         {
             // Convert to System.Drawing.Bitmap
