@@ -48,14 +48,21 @@ namespace MyTimestamp
             return await Task.Run(() =>
             {
                 // Convert System.Drawing.Bitmap to OpenCvSharp.Mat
-                // This is needed because PaddleOCR uses OpenCvSharp
-                using (var ms = new MemoryStream())
+                // Ensure 24bpp RGB to avoid Alpha channel issues with Paddle
+                using (var bip24 = new Bitmap(image.Width, image.Height, PixelFormat.Format24bppRgb))
                 {
-                    image.Save(ms, ImageFormat.Bmp);
-                    ms.Position = 0;
+                    using (var gr = Graphics.FromImage(bip24))
+                    {
+                        gr.DrawImage(image, new Rectangle(0, 0, image.Width, image.Height));
+                    }
                     
-                    // Decode from stream to Mat
-                    var bytes = ms.ToArray();
+                    using (var ms = new MemoryStream())
+                    {
+                        bip24.Save(ms, ImageFormat.Bmp);
+                        ms.Position = 0;
+                        
+                        // Decode from stream to Mat
+                        var bytes = ms.ToArray();
                     using (var mat = Cv2.ImDecode(bytes, ImreadModes.Color))
                     {
                         if (mat.Empty())
@@ -71,6 +78,7 @@ namespace MyTimestamp
                             Text = result.Text,
                             Confidence = 0 // Aggregate confidence if needed, result.Regions[i].Score
                         };
+                    }
                     }
                 }
             });
