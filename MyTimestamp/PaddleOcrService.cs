@@ -5,7 +5,7 @@ using System.IO;
 using System.Threading.Tasks;
 using Sdcb.PaddleOCR;
 using Sdcb.PaddleOCR.Models;
-using Sdcb.PaddleOCR.Models.Local; // Package installed, this should work now
+using Sdcb.PaddleOCR.Models.Local; 
 using Sdcb.PaddleInference;
 using OpenCvSharp;
 
@@ -14,7 +14,7 @@ namespace MyTimestamp
     public class PaddleOcrService : IOcrService
     {
         public string Name => "PaddleOCR (Local)";
-        public bool IsAvailable => true; // Always available if libs are present
+        public bool IsAvailable => true; 
 
         private PaddleOcrAll? _engine;
 
@@ -25,16 +25,10 @@ namespace MyTimestamp
             await Task.Run(() =>
             {
                 // Full model (Detection + Classification + Recognition)
-                // Using LocalV3 standard models (English/Chinese usually default, check args)
-                // "LocalV3" usually includes multiple languages in the nuget or you specify.
-                // Assuming "English" is needed. LocalV3 default might be Chinese/English mixed or universal.
-                // Let's use KnownOCRModel.EnglishV3 if accessible, or just default which is often robust.
-                
-                // Note: The nuget "Sdcb.PaddleOCR.Models.Local" provides `LocalFullModels`.
-                
+                // Disable rotation for stability on timestamps (often small/high contrast)
                 _engine = new PaddleOcrAll(LocalFullModels.EnglishV3, PaddleDevice.Mkldnn())
                 {
-                    AllowRotateDetection = true,
+                    AllowRotateDetection = false, 
                     Enable180Classification = false,
                 };
             });
@@ -47,12 +41,13 @@ namespace MyTimestamp
 
             return await Task.Run(() =>
             {
-                // Convert System.Drawing.Bitmap to OpenCvSharp.Mat
                 // Ensure 24bpp RGB to avoid Alpha channel issues with Paddle
+                // Using a white background to prevent transparent pixels becoming black
                 using (var bip24 = new Bitmap(image.Width, image.Height, PixelFormat.Format24bppRgb))
                 {
                     using (var gr = Graphics.FromImage(bip24))
                     {
+                        gr.Clear(Color.White);
                         gr.DrawImage(image, new Rectangle(0, 0, image.Width, image.Height));
                     }
                     
@@ -63,22 +58,38 @@ namespace MyTimestamp
                         
                         // Decode from stream to Mat
                         var bytes = ms.ToArray();
-                    using (var mat = Cv2.ImDecode(bytes, ImreadModes.Color))
-                    {
-                        if (mat.Empty())
+                        using (var srcMat = Cv2.ImDecode(bytes, ImreadModes.Color))
                         {
-                            throw new Exception("One or more images could not be decoded by OpenCV.");
-                        }
+                            if (srcMat.Empty())
+                            {
+                                throw new Exception("One or more images could not be decoded by OpenCV.");
+                            }
 
-                        var result = _engine.Run(mat);
-                        
-                        // Result text
-                        return new OcrResultModel
-                        {
-                            Text = result.Text,
-                            Confidence = 0 // Aggregate confidence if needed, result.Regions[i].Score
-                        };
-                    }
+                            // Add padding to improve detection on tight crops or binarized inputs
+                            using (var paddedMat = new Mat())
+                            {
+                                int pad = 32; // 32px white padding
+                                Cv2.CopyMakeBorder(srcMat, paddedMat, pad, pad, pad, pad, BorderTypes.Constant, Scalar.White);
+                                
+                                try 
+                                {
+                                    var result = _engine.Run(paddedMat);
+                                    
+                                    // Result text
+                                    return new OcrResultModel
+                                    {
+                                        Text = result.Text,
+                                        Confidence = 0 
+                                    };
+                                }
+                                catch (Exception ex)
+                                {
+                                    // If prediction fails (e.g. Detector error), return info or empty
+                                    // Don't crash the app
+                                    return new OcrResultModel { Text = $"(OCR Error: {ex.Message})" };
+                                }
+                            }
+                        }
                     }
                 }
             });
