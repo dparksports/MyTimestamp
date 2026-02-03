@@ -55,8 +55,14 @@ namespace MyTimestamp
                     ms.Position = 0;
                     
                     // Decode from stream to Mat
-                    using (var mat = Cv2.ImDecode(Mat.FromStream(ms, ImreadModes.Color), ImreadModes.Color))
+                    var bytes = ms.ToArray();
+                    using (var mat = Cv2.ImDecode(bytes, ImreadModes.Color))
                     {
+                        if (mat.Empty())
+                        {
+                            throw new Exception("One or more images could not be decoded by OpenCV.");
+                        }
+
                         var result = _engine.Run(mat);
                         
                         // Result text
